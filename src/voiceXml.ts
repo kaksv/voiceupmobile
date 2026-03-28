@@ -35,28 +35,37 @@ export function hangupGoodbye(message: string): string {
 
 export type OtpPromptMode = "sms_only" | "sms_and_voice" | "voice_only";
 
-/** Optional `spokenCode`: read digits on the call (pilot / SMS fallback). */
+/** Optional `spokenCode`: read digits on the call (pilot / SMS fallback). Code is spoken twice. */
 export function promptOtp(
   callbackUrl: string,
   spokenCode?: string,
   mode: OtpPromptMode = "sms_only"
 ): string {
   const url = escapeXml(callbackUrl);
-  let intro: string;
   if (!spokenCode) {
-    intro =
+    const intro =
       "Welcome to the MoMo voice assistant demo. We are sending a six digit code to your phone by SMS. Enter the code using your keypad when you hear the beep.";
-  } else {
-    const spaced = spokenCode.split("").join(", ");
-    if (mode === "voice_only") {
-      intro = `Welcome to the MoMo voice assistant demo. We could not use SMS for your code. Your code is: ${spaced}. Enter that code using your keypad when you hear the beep. Do not share this code with anyone.`;
-    } else {
-      intro = `Welcome to the MoMo voice assistant demo. We are sending a six digit code by SMS. Your code is also: ${spaced}. Enter the code using your keypad when you hear the beep. Do not share this code with anyone.`;
-    }
-  }
-  return response(
-    `<GetDigits timeout="45" numDigits="6" callbackUrl="${url}">
+    return response(
+      `<GetDigits timeout="45" numDigits="6" callbackUrl="${url}">
         ${say(intro)}
+    </GetDigits>`
+    );
+  }
+
+  const spaced = spokenCode.split("").join(", ");
+  const firstLine =
+    mode === "voice_only"
+      ? `Welcome to the MoMo voice assistant demo. We could not use SMS for your code. Your code is: ${spaced}.`
+      : `Welcome to the MoMo voice assistant demo. We are sending a six digit code by SMS. Your code is also: ${spaced}.`;
+  const repeatLine = `I repeat. Your code is: ${spaced}.`;
+  const enterLine =
+    "Enter the code using your keypad when you hear the beep. Do not share this code with anyone.";
+
+  return response(
+    `<GetDigits timeout="60" numDigits="6" callbackUrl="${url}">
+        ${say(firstLine)}
+        ${say(repeatLine)}
+        ${say(enterLine)}
     </GetDigits>`
   );
 }
@@ -73,9 +82,44 @@ export function promptOtpRetry(callbackUrl: string): string {
 export function promptMainMenu(callbackUrl: string): string {
   const url = escapeXml(callbackUrl);
   return response(
-    `<GetDigits timeout="20" numDigits="1" callbackUrl="${url}">
+    `<GetDigits timeout="25" numDigits="1" callbackUrl="${url}">
         ${say(
-          "You are verified. For a demo balance in Ugandan shillings, press 1. For a savings tip, press 2. To end the call, press 0."
+          "You are verified. For a demo balance in Ugandan shillings, press 1. For a savings tip, press 2. To try a demo send money flow, press 3. To end the call, press 0."
+        )}
+    </GetDigits>`
+  );
+}
+
+/** Amount in whole UGX; caller finishes with hash (#). */
+export function promptSendAmount(callbackUrl: string): string {
+  const url = escapeXml(callbackUrl);
+  return response(
+    `<GetDigits timeout="45" numDigits="0" finishOnKey="#" callbackUrl="${url}">
+        ${say(
+          "Send money demo. Enter the amount in Ugandan shillings using your keypad. Do not include cents. When you have finished, press the hash key."
+        )}
+    </GetDigits>`
+  );
+}
+
+export function promptSendAmountRetry(callbackUrl: string): string {
+  const url = escapeXml(callbackUrl);
+  return response(
+    `<GetDigits timeout="45" numDigits="0" finishOnKey="#" callbackUrl="${url}">
+        ${say(
+          "That amount was not valid. Enter a whole number in Ugandan shillings between five hundred and fifty million, then press the hash key."
+        )}
+    </GetDigits>`
+  );
+}
+
+export function promptSendConfirm(callbackUrl: string, amountUgx: number): string {
+  const url = escapeXml(callbackUrl);
+  const formatted = amountUgx.toLocaleString("en-US");
+  return response(
+    `<GetDigits timeout="25" numDigits="1" callbackUrl="${url}">
+        ${say(
+          `You are about to send ${formatted} Ugandan shillings as a demo only. No real money will move. To confirm, press 1. To cancel, press 2.`
         )}
     </GetDigits>`
   );
