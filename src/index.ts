@@ -1,5 +1,11 @@
 import express from "express";
-import { AT_API_KEY, PORT, PUBLIC_BASE_URL } from "./config.js";
+import {
+  AT_API_KEY,
+  OTP_ALSO_SPEAK_ON_CALL,
+  PORT,
+  PUBLIC_BASE_URL,
+  SMS_MAX_ATTEMPTS,
+} from "./config.js";
 import { handleVoiceInbound } from "./voiceWebhook.js";
 
 const app = express();
@@ -11,6 +17,8 @@ app.get("/health", (_req, res) => {
     status: "ok",
     sms_configured: Boolean(AT_API_KEY),
     public_base_url_configured: Boolean(PUBLIC_BASE_URL),
+    otp_also_speak_on_call: OTP_ALSO_SPEAK_ON_CALL,
+    sms_max_attempts: SMS_MAX_ATTEMPTS,
   });
 });
 

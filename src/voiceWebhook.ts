@@ -1,6 +1,12 @@
 import type { Request, Response } from "express";
-import { AT_API_KEY, MOCK_BALANCE_UGX, PUBLIC_BASE_URL } from "./config.js";
-import { sendSms } from "./sms.js";
+import {
+  MOCK_BALANCE_UGX,
+  OTP_ALSO_SPEAK_ON_CALL,
+  OTP_SPEAK_IF_NO_API_KEY,
+  OTP_SPEAK_IF_SMS_FAILS,
+  PUBLIC_BASE_URL,
+} from "./config.js";
+import { sendOtpSms, type SmsOutcome } from "./sms.js";
 import {
   generateOtp,
   getOrCreateSession,
@@ -57,6 +63,27 @@ function xml(res: Response, body: string): void {
   res.type("application/xml").send(body);
 }
 
+function shouldReadOtpAloud(outcome: SmsOutcome): boolean {
+  switch (outcome.outcome) {
+    case "no_api_key":
+      return OTP_SPEAK_IF_NO_API_KEY;
+    case "delivered":
+      return OTP_ALSO_SPEAK_ON_CALL;
+    case "http_error":
+    case "not_accepted":
+      return OTP_SPEAK_IF_SMS_FAILS;
+  }
+}
+
+function otpPromptMode(
+  outcome: SmsOutcome,
+  readAloud: boolean
+): "sms_only" | "sms_and_voice" | "voice_only" {
+  if (!readAloud) return "sms_only";
+  if (outcome.outcome === "delivered") return "sms_and_voice";
+  return "voice_only";
+}
+
 export async function handleVoiceInbound(req: Request, res: Response): Promise<void> {
   const form = formRecord(req);
   console.info("[voice] form keys:", Object.keys(form).sort().join(", "));
@@ -110,23 +137,48 @@ async function handleAwaitOtp(
   if (dtmf === undefined) {
     if (!session.otpSmsSent) {
       const code = generateOtp(session);
-      if (!AT_API_KEY) {
-        console.warn(`[voice] DEV: OTP for ${phone} would be sent via SMS: ${code}`);
+      const msg = `MoMo Voice Assistant code: ${code}. Do not share this code.`;
+      const outcome = await sendOtpSms(phone, msg);
+
+      const readAloud = shouldReadOtpAloud(outcome);
+      if (!readAloud) {
+        if (outcome.outcome === "no_api_key") {
+          session.otpSmsSent = true;
+          xml(
+            res,
+            voiceXml.hangupGoodbye(
+              "SMS is not configured on this server. Please contact support."
+            )
+          );
+          return;
+        }
+        if (outcome.outcome === "http_error" || outcome.outcome === "not_accepted") {
+          console.error("[voice] SMS not delivered;", outcome);
+          session.otpSmsSent = true;
+          xml(
+            res,
+            voiceXml.hangupGoodbye(
+              "We could not send the verification SMS. Please try your call again later."
+            )
+          );
+          return;
+        }
       }
-      try {
-        await sendSms(phone, `MoMo Voice Assistant code: ${code}. Do not share this code.`);
-      } catch (e) {
-        console.error("[voice] SMS send failed; ending call", e);
-        session.otpSmsSent = true;
-        xml(
-          res,
-          voiceXml.hangupGoodbye(
-            "We could not send the verification SMS. Please try again later."
-          )
-        );
-        return;
+
+      if (outcome.outcome === "no_api_key") {
+        console.warn(`[voice] DEV: OTP for ${phone} (no SMS key): ${code}`);
       }
+
       session.otpSmsSent = true;
+      xml(
+        res,
+        voiceXml.promptOtp(
+          cb,
+          readAloud ? code : undefined,
+          otpPromptMode(outcome, readAloud)
+        )
+      );
+      return;
     }
     xml(res, voiceXml.promptOtp(cb));
     return;

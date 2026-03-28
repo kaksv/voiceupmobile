@@ -33,13 +33,30 @@ export function hangupGoodbye(message: string): string {
   return response(say(message));
 }
 
-export function promptOtp(callbackUrl: string): string {
+export type OtpPromptMode = "sms_only" | "sms_and_voice" | "voice_only";
+
+/** Optional `spokenCode`: read digits on the call (pilot / SMS fallback). */
+export function promptOtp(
+  callbackUrl: string,
+  spokenCode?: string,
+  mode: OtpPromptMode = "sms_only"
+): string {
   const url = escapeXml(callbackUrl);
+  let intro: string;
+  if (!spokenCode) {
+    intro =
+      "Welcome to the MoMo voice assistant demo. We are sending a six digit code to your phone by SMS. Enter the code using your keypad when you hear the beep.";
+  } else {
+    const spaced = spokenCode.split("").join(", ");
+    if (mode === "voice_only") {
+      intro = `Welcome to the MoMo voice assistant demo. We could not use SMS for your code. Your code is: ${spaced}. Enter that code using your keypad when you hear the beep. Do not share this code with anyone.`;
+    } else {
+      intro = `Welcome to the MoMo voice assistant demo. We are sending a six digit code by SMS. Your code is also: ${spaced}. Enter the code using your keypad when you hear the beep. Do not share this code with anyone.`;
+    }
+  }
   return response(
     `<GetDigits timeout="45" numDigits="6" callbackUrl="${url}">
-        ${say(
-          "Welcome to the MoMo voice assistant demo. We are sending a six digit code to your phone by SMS. Enter the code using your keypad when you hear the beep."
-        )}
+        ${say(intro)}
     </GetDigits>`
   );
 }
