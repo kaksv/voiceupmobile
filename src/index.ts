@@ -1,8 +1,11 @@
+import fs from "node:fs";
+import path from "node:path";
 import express from "express";
 import {
   ADMIN_TOKEN,
   AT_API_KEY,
   DATABASE_URL,
+  OPENAI_API_KEY,
   OTP_ALSO_SPEAK_ON_CALL,
   PORT,
   PUBLIC_BASE_URL,
@@ -41,6 +44,7 @@ async function main(): Promise<void> {
       redis_configured: Boolean(REDIS_URL),
       session_store_ok: sessionStoreOk,
       admin_enabled: Boolean(ADMIN_TOKEN),
+      openai_configured: Boolean(OPENAI_API_KEY),
       otp_also_speak_on_call: OTP_ALSO_SPEAK_ON_CALL,
       sms_max_attempts: SMS_MAX_ATTEMPTS,
     });
@@ -51,6 +55,28 @@ async function main(): Promise<void> {
   });
 
   registerAdminRoutes(app);
+
+  const webDist = path.join(process.cwd(), "frontend", "dist");
+  if (fs.existsSync(path.join(webDist, "index.html"))) {
+    console.info("[web] serving dashboard SPA from", webDist);
+    app.use(express.static(webDist));
+    app.get("*", (req, res, next) => {
+      if (req.method !== "GET") {
+        next();
+        return;
+      }
+      if (
+        req.path.startsWith("/api/") ||
+        req.path.startsWith("/webhooks/") ||
+        req.path === "/health" ||
+        req.path === "/admin"
+      ) {
+        next();
+        return;
+      }
+      res.sendFile(path.join(webDist, "index.html"));
+    });
+  }
 
   app.use(
     (

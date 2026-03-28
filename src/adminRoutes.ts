@@ -1,20 +1,41 @@
-import type { Express, Request, Response } from "express";
-import { ADMIN_TOKEN } from "./config.js";
+import {
+  Router,
+  json,
+  type Express,
+  type NextFunction,
+  type Request,
+  type Response,
+} from "express";
+import { buildPilotContext } from "./adminContext.js";
+import {
+  ADMIN_TOKEN,
+  OPENAI_API_KEY,
+  OPENAI_MODEL,
+} from "./config.js";
 import { getPgPool } from "./pgPool.js";
+import { openAiChat } from "./openAiInsights.js";
 import type { CallSession } from "./sessionModel.js";
 import { maskPhoneE164 } from "./voiceLog.js";
 
-function assertAdmin(req: Request, res: Response): boolean {
+function adminAuthMiddleware(
+  req: Request,
+  res: Response,
+  next: NextFunction
+): void {
+  if (!ADMIN_TOKEN) {
+    res.status(503).json({ error: "admin_disabled" });
+    return;
+  }
   const auth = req.headers.authorization;
   const bearer =
     auth?.startsWith("Bearer ") ? auth.slice("Bearer ".length).trim() : undefined;
   const q = typeof req.query.token === "string" ? req.query.token : undefined;
   const tok = bearer ?? q;
-  if (!ADMIN_TOKEN || tok !== ADMIN_TOKEN) {
+  if (tok !== ADMIN_TOKEN) {
     res.status(401).json({ error: "unauthorized" });
-    return false;
+    return;
   }
-  return true;
+  next();
 }
 
 function publicSessionPayload(p: CallSession): Record<string, unknown> {
@@ -51,7 +72,7 @@ const adminPageHtml = `<!DOCTYPE html>
 </head>
 <body>
   <h1>MoMo Voice assistant — pilot admin</h1>
-  <p class="muted">Sessions and demo transfers (Postgres only). Token is sent as <code>Authorization: Bearer …</code>.</p>
+  <p class="muted">Sessions and demo transfers (Postgres only). For AI insights use the <a href="/">dashboard</a>. Token: <code>Authorization: Bearer …</code></p>
   <div id="tokenRow">
     <label>Admin token <input type="password" id="token" autocomplete="off" /></label>
     <button type="button" id="load">Load</button>
@@ -114,8 +135,11 @@ export function registerAdminRoutes(app: Express): void {
     res.type("html").send(adminPageHtml);
   });
 
-  app.get("/api/admin/sessions", async (req, res) => {
-    if (!assertAdmin(req, res)) return;
+  const api = Router();
+  api.use(adminAuthMiddleware);
+  api.use(json({ limit: "128kb" }));
+
+  api.get("/sessions", async (req, res) => {
     const pool = getPgPool();
     if (!pool) {
       res.status(503).json({ error: "postgres_required" });
@@ -146,8 +170,7 @@ export function registerAdminRoutes(app: Express): void {
     res.json({ sessions });
   });
 
-  app.get("/api/admin/transfers", async (req, res) => {
-    if (!assertAdmin(req, res)) return;
+  api.get("/transfers", async (req, res) => {
     const pool = getPgPool();
     if (!pool) {
       res.status(503).json({ error: "postgres_required" });
@@ -181,4 +204,49 @@ export function registerAdminRoutes(app: Express): void {
     }));
     res.json({ transfers });
   });
+
+  api.post("/ai/insights", async (req, res) => {
+    if (!OPENAI_API_KEY) {
+      res.status(503).json({ error: "openai_not_configured" });
+      return;
+    }
+    const pool = getPgPool();
+    if (!pool) {
+      res.status(503).json({ error: "postgres_required" });
+      return;
+    }
+    const body = req.body as { message?: string };
+    const message = typeof body.message === "string" ? body.message.trim() : "";
+    if (!message || message.length > 4000) {
+      res.status(400).json({ error: "invalid_message" });
+      return;
+    }
+
+    try {
+      const context = await buildPilotContext(pool);
+      const system = `You are an operations assistant for a Uganda-focused voice mobile-money pilot built on Africa's Talking (IVR + SMS OTP). 
+Rules:
+- Answer using ONLY the pilot context JSON and the user's question. If data is missing, say you do not have it.
+- Do not invent statistics, phone numbers, or user identities.
+- Be concise: short headings or bullets. Plain language suitable for a product operator.`;
+
+      const user = `Operator question:\n${message}\n\nPilot context (JSON):\n${JSON.stringify(context, null, 2)}`;
+
+      const answer = await openAiChat({
+        apiKey: OPENAI_API_KEY,
+        model: OPENAI_MODEL,
+        system,
+        user,
+      });
+      res.json({ answer, model: OPENAI_MODEL, contextGeneratedAt: context.generatedAt });
+    } catch (e) {
+      console.error("[ai/insights]", e);
+      res.status(502).json({
+        error: "openai_failed",
+        detail: e instanceof Error ? e.message : String(e),
+      });
+    }
+  });
+
+  app.use("/api/admin", api);
 }

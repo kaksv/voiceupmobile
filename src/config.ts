@@ -103,3 +103,8 @@ export const MAX_SEND_UGX = Math.max(
  * Bearer token for `/admin` and `/api/admin/*`. If unset, admin routes are not registered.
  */
 export const ADMIN_TOKEN = env("ADMIN_TOKEN");
+
+/** Server-side only — OpenAI for admin insights (`POST /api/admin/ai/insights`). */
+export const OPENAI_API_KEY = env("OPENAI_API_KEY") ?? "";
+
+export const OPENAI_MODEL = env("OPENAI_MODEL") ?? "gpt-4o-mini";
