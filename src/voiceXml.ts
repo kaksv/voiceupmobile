@@ -1,6 +1,8 @@
 /**
  * Africa's Talking Voice XML (Say, GetDigits, Reject).
  * If digit collection never hits your server, try `callBackUrl` instead of `callbackUrl`.
+ *
+ * GetDigits must have exactly ONE child: either Say or Play (not multiple Say nodes).
  */
 
 function escapeXml(text: string): string {
@@ -60,12 +62,11 @@ export function promptOtp(
   const repeatLine = `I repeat. Your code is: ${spaced}.`;
   const enterLine =
     "Enter the code using your keypad when you hear the beep. Do not share this code with anyone.";
+  const fullPrompt = `${firstLine} ${repeatLine} ${enterLine}`;
 
   return response(
     `<GetDigits timeout="60" numDigits="6" callbackUrl="${url}">
-        ${say(firstLine)}
-        ${say(repeatLine)}
-        ${say(enterLine)}
+        ${say(fullPrompt)}
     </GetDigits>`
   );
 }
