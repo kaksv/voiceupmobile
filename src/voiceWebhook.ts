@@ -10,6 +10,8 @@ import {
   OTP_TTL_SEC,
   PUBLIC_BASE_URL,
 } from "./config.js";
+import { recordDemoTransfer } from "./demoTransferDb.js";
+import { getPgPool } from "./pgPool.js";
 import {
   logMockTransfer,
   mockTransferReference,
@@ -26,6 +28,7 @@ import {
   saveSession,
 } from "./sessionsRuntime.js";
 import { sendOtpSms, type SmsOutcome } from "./sms.js";
+import { maskPhoneE164, voiceLog } from "./voiceLog.js";
 import * as voiceXml from "./voiceXml.js";
 
 const MAX_OTP_ATTEMPTS = 3;
@@ -133,6 +136,14 @@ export async function handleVoiceInbound(req: Request, res: Response): Promise<v
   const cb = voiceInboundUrl();
   let session = await loadOrCreateSession(sid, phone);
   const dtmf = dtmfFrom(form);
+
+  voiceLog({
+    event: "voice_webhook",
+    sessionId: sid,
+    phase: session.phase,
+    phone: maskPhoneE164(phone),
+    dtmf: dtmf === undefined ? false : true,
+  });
 
   if (session.phase === "await_otp") {
     await handleAwaitOtp(res, sid, session, phone, dtmf, cb);
@@ -294,6 +305,7 @@ async function handleSendAmount(
   }
   session.pendingSendAmount = amount;
   session.phase = "send_confirm";
+  session.transferNonce = (session.transferNonce ?? 0) + 1;
   await saveSession(sid, session);
   xml(res, voiceXml.promptSendConfirm(cb, amount));
 }
@@ -319,11 +331,36 @@ async function handleSendConfirm(
   }
 
   if (dtmf === "1") {
-    const ref = mockTransferReference();
-    logMockTransfer({
-      phone: session.phone,
+    const idempotencyKey = `demo:${sid}:${session.transferNonce ?? 0}`;
+    const refNew = mockTransferReference();
+    const pool = getPgPool();
+    let ref = refNew;
+    let deduped = false;
+    if (pool) {
+      const out = await recordDemoTransfer(pool, {
+        idempotencyKey,
+        sessionId: sid,
+        phone: session.phone,
+        amountUgx: pending,
+        reference: refNew,
+      });
+      ref = out.reference;
+      deduped = out.deduped;
+    } else {
+      logMockTransfer({
+        phone: session.phone,
+        amountUgx: pending,
+        reference: refNew,
+      });
+    }
+    voiceLog({
+      event: "demo_transfer",
+      sessionId: sid,
+      phone: maskPhoneE164(session.phone),
       amountUgx: pending,
       reference: ref,
+      deduped,
+      idempotencyKey,
     });
     session.phase = "main_menu";
     session.pendingSendAmount = null;

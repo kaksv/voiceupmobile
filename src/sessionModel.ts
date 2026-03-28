@@ -22,6 +22,8 @@ export interface CallSession {
   otpSmsSent: boolean;
   /** Mock send-money flow: amount in UGX before confirm. */
   pendingSendAmount: number | null;
+  /** Increments each time user reaches confirm step (idempotency for demo transfer). */
+  transferNonce: number;
 }
 
 export function createNewSession(phone: string): CallSession {
@@ -33,6 +35,7 @@ export function createNewSession(phone: string): CallSession {
     otpAttempts: 0,
     otpSmsSent: false,
     pendingSendAmount: null,
+    transferNonce: 0,
   };
 }
 

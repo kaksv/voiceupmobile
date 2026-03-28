@@ -1,11 +1,7 @@
+import type { Pool } from "pg";
 import { Redis } from "ioredis";
-import pg from "pg";
-import {
-  DATABASE_URL,
-  PGSSL_RELAX,
-  REDIS_URL,
-  SESSION_TTL_SEC,
-} from "./config.js";
+import { DATABASE_URL, REDIS_URL, SESSION_TTL_SEC } from "./config.js";
+import { closePostgres, connectPostgres } from "./pgPool.js";
 import type { CallSession } from "./sessionModel.js";
 
 const KEY_PREFIX = "atv:session:";
@@ -19,46 +15,8 @@ export interface SessionStore {
   ping(): Promise<boolean>;
 }
 
-function pgPoolConfig(): pg.PoolConfig {
-  if (!DATABASE_URL) {
-    throw new Error("DATABASE_URL required for Postgres pool");
-  }
-  const u = DATABASE_URL.toLowerCase();
-  const isLocal =
-    u.includes("localhost") ||
-    u.includes("127.0.0.1") ||
-    u.includes("socket:");
-
-  let ssl: pg.PoolConfig["ssl"];
-  if (!isLocal) {
-    ssl = PGSSL_RELAX ? { rejectUnauthorized: false } : undefined;
-  }
-
-  return {
-    connectionString: DATABASE_URL,
-    max: 8,
-    idleTimeoutMillis: 30_000,
-    ssl,
-  };
-}
-
-async function ensureVoiceSessionsTable(pool: pg.Pool): Promise<void> {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS voice_sessions (
-      session_id TEXT PRIMARY KEY,
-      payload JSONB NOT NULL,
-      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      expires_at TIMESTAMPTZ NOT NULL
-    )
-  `);
-  await pool.query(`
-    CREATE INDEX IF NOT EXISTS voice_sessions_expires_at_idx
-    ON voice_sessions (expires_at)
-  `);
-}
-
 class PostgresSessionStore implements SessionStore {
-  constructor(private readonly pool: pg.Pool) {}
+  constructor(private readonly pool: Pool) {}
 
   async get(sessionId: string): Promise<CallSession | null> {
     const r = await this.pool.query<{
@@ -81,7 +39,8 @@ class PostgresSessionStore implements SessionStore {
       ]);
       return null;
     }
-    return row.payload as CallSession;
+    const raw = row.payload as CallSession;
+    return { ...raw, transferNonce: raw.transferNonce ?? 0 };
   }
 
   async set(sessionId: string, session: CallSession): Promise<void> {
@@ -118,7 +77,8 @@ class MemorySessionStore implements SessionStore {
 
   async get(sessionId: string): Promise<CallSession | null> {
     const v = this.map.get(sessionId);
-    return v ? { ...v } : null;
+    if (!v) return null;
+    return { ...v, transferNonce: v.transferNonce ?? 0 };
   }
 
   async set(sessionId: string, session: CallSession): Promise<void> {
@@ -141,7 +101,8 @@ class RedisSessionStore implements SessionStore {
     const raw = await this.client.get(KEY_PREFIX + sessionId);
     if (raw == null) return null;
     try {
-      return JSON.parse(raw) as CallSession;
+      const s = JSON.parse(raw) as CallSession;
+      return { ...s, transferNonce: s.transferNonce ?? 0 };
     } catch {
       return null;
     }
@@ -175,19 +136,14 @@ export async function createSessionStore(): Promise<{
   backend: SessionBackend;
 }> {
   if (DATABASE_URL) {
-    const pool = new pg.Pool(pgPoolConfig());
-    pool.on("error", (err: Error) => {
-      console.error("[postgres] pool error:", err.message);
-    });
-    await ensureVoiceSessionsTable(pool);
-    await pool.query("SELECT 1");
+    const pool = await connectPostgres();
     console.info("[session] using PostgreSQL for call sessions");
     const store = new PostgresSessionStore(pool);
     return {
       store,
       backend: "postgres",
       shutdown: async () => {
-        await pool.end();
+        await closePostgres();
       },
     };
   }

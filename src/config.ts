@@ -98,3 +98,8 @@ export const MAX_SEND_UGX = Math.max(
   MIN_SEND_UGX,
   Number.parseInt(env("MAX_SEND_UGX") ?? "50000000", 10) || 50_000_000
 );
+
+/**
+ * Bearer token for `/admin` and `/api/admin/*`. If unset, admin routes are not registered.
+ */
+export const ADMIN_TOKEN = env("ADMIN_TOKEN");

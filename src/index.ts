@@ -1,5 +1,6 @@
 import express from "express";
 import {
+  ADMIN_TOKEN,
   AT_API_KEY,
   DATABASE_URL,
   OTP_ALSO_SPEAK_ON_CALL,
@@ -8,6 +9,7 @@ import {
   REDIS_URL,
   SMS_MAX_ATTEMPTS,
 } from "./config.js";
+import { registerAdminRoutes } from "./adminRoutes.js";
 import { createSessionStore } from "./sessionStore.js";
 import {
   setSessionStore,
@@ -38,6 +40,7 @@ async function main(): Promise<void> {
       database_configured: Boolean(DATABASE_URL),
       redis_configured: Boolean(REDIS_URL),
       session_store_ok: sessionStoreOk,
+      admin_enabled: Boolean(ADMIN_TOKEN),
       otp_also_speak_on_call: OTP_ALSO_SPEAK_ON_CALL,
       sms_max_attempts: SMS_MAX_ATTEMPTS,
     });
@@ -47,18 +50,24 @@ async function main(): Promise<void> {
     handleVoiceInbound(req, res).catch(next);
   });
 
+  registerAdminRoutes(app);
+
   app.use(
     (
       err: unknown,
-      _req: express.Request,
+      req: express.Request,
       res: express.Response,
       _next: express.NextFunction
     ) => {
       console.error(err);
-      res.status(500).type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
+      if (req.path.startsWith("/webhooks/voice")) {
+        res.status(500).type("application/xml").send(`<?xml version="1.0" encoding="UTF-8"?>
 <Response>
     <Say>Service error. Please try again later.</Say>
 </Response>`);
+        return;
+      }
+      res.status(500).json({ error: "internal_error" });
     }
   );
 
